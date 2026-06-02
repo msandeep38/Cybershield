@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 =========================================================
-  CyberShield v3.0 - Attack Detection & Prevention Tool
+  CyberShield v4.0 - Attack Detection & Prevention Tool
   Detects: XSS, SQL Injection, DoS, Brute Force, Port Scan
   NEW: Reverse Proxy Mode — protect ANY website
   Platform: Kali Linux / Windows
@@ -50,7 +50,7 @@ state_lock     = threading.Lock()
 request_log    = defaultdict(list)
 login_attempts = defaultdict(list)
 blocked_ips    = {}   # {ip: unblock_timestamp}
-port_scan_log  = defaultdict(set)
+port_scan_log  = defaultdict(list)   # list of (port, timestamp)
 attack_counts  = defaultdict(int)
 total_attacks  = 0
 attack_log     = []
@@ -237,10 +237,14 @@ def record_login_attempt(ip: str, success: bool, username: str = "") -> bool:
 # ─────────────────────────────────────────────
 #  5. PORT SCAN DETECTION
 # ─────────────────────────────────────────────
+PORT_SCAN_TTL = 60  # seconds
+
 def check_port_scan(ip: str, port: int):
+    now = time.time()
     with state_lock:
-        port_scan_log[ip].add(port)
-        distinct = len(port_scan_log[ip])
+        port_scan_log[ip] = [(p, t) for p, t in port_scan_log[ip] if now - t < PORT_SCAN_TTL]
+        port_scan_log[ip].append((port, now))
+        distinct = len({p for p, t in port_scan_log[ip]})
     status = "BLOCKED" if distinct >= CONFIG["portscan_threshold"] else "LOGGED"
     logger.warning(f"[PORT SCAN] IP={ip} probed port={port} (distinct={distinct})")
     record_attack("PortScan", ip, f"Probed port {port} ({distinct} distinct ports so far)", status)
@@ -272,6 +276,8 @@ def port_scan_listener():
 #  FIREWALL
 # ─────────────────────────────────────────────
 def block_ip_firewall(ip: str):
+    if not sys.platform.startswith("linux"):
+        return
     ret = os.system(f"iptables -A INPUT -s {ip} -j DROP 2>/dev/null")
     if ret == 0:
         logger.info(f"[FIREWALL] Blocked {ip}")
@@ -430,7 +436,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header(key, val)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(resp_body)))
-            self.send_header("X-Protected-By", "CyberShield-v3")
+            self.send_header("X-Protected-By", "CyberShield-v4")
             self.end_headers()
             self.wfile.write(resp_body)
 
@@ -1212,7 +1218,7 @@ def main():
 
     print(f"""
 ╔══════════════════════════════════════════════════════╗
-║            🛡️  CyberShield v3.0                     ║
+║            🛡️  CyberShield v4.0                     ║
 ║   XSS | SQLi | DoS | BruteForce | PortScan          ║
 ║   Mode: {'🔒 Reverse Proxy' if mode == 'PROXY' else '🎯 Demo (built-in target app)  '}          ║
 ╚══════════════════════════════════════════════════════╝
